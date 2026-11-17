@@ -1,0 +1,456 @@
+// Game.hl : Game.c / Game.h の写し。ゲーム画面（状態の遷移、当たり判定、撃ち返し）。
+
+import "System.hl"
+import "Sound.hl"
+import "Math.hl"
+import "App.hl"
+import "Back.hl"
+import "Ship.hl"
+import "Shot.hl"
+import "Enemy.hl"
+import "Bullet.hl"
+
+// マクロの定義
+// 状態
+const GAME_STATE_INITIALIZE = 0
+const GAME_STATE_LOAD = 1
+const GAME_STATE_START = 2
+const GAME_STATE_PLAY = 3
+const GAME_STATE_TIMEUP = 4
+const GAME_STATE_OVER = 5
+const GAME_STATE_HISCORE = 6
+const GAME_STATE_UNLOAD = 7
+const GAME_STATE_END = 8
+// スプライト
+const GAME_SPRITE_BULLET = 0x00
+const GAME_SPRITE_BULLET_OFFSET = 0x24
+const GAME_SPRITE_ENEMY = 0x48
+const GAME_SPRITE_ENEMY_OFFSET = 0x48
+const GAME_SPRITE_SHIP = 0x6c
+const GAME_SPRITE_SHOT = 0x70
+// フラグ
+const GAME_FLAG_PLAYABLE = 0
+const GAME_FLAG_PAUSE = 1
+const GAME_FLAG_STATUS = 2
+
+// 定数の定義
+data backTypeTable: u8 = [ 0x00, 0x01, 0x01, 0x00, 0x00 ]     // 撃ち返しデータ
+data backAngleTable: u8 = [ 0x00, 0x0c, 0xf4, 0x18, 0xe8 ]
+data backSpeedTable: u8 = [
+  0x02, 0x01, 0x02, 0x00, 0x02, 0x00, 0x02, 0x01, 0x02, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0x02, 0x00, 0x01, 0x01, 0x01, 0x01, 0x02, 0x00, 0x02, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0x01, 0x01, 0x01, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0x01, 0x01, 0x01, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+]
+
+// 変数の定義
+var gameFlag: u8                              // フラグ
+var gameShootDown: u8                         // 倒した数
+var gameCount: u8                             // カウント
+var gameBackAngle: u8                         // 撃ち返し
+var gameBackCos: i16
+var gameBackSin: i16
+
+// ゲームを更新する
+fn GameUpdate() {
+  if appState == GAME_STATE_INITIALIZE { GameInitialize() }     // 初期化
+  else if appState == GAME_STATE_LOAD { GameLoad() }            // ロード
+  else if appState == GAME_STATE_START { GameStart() }          // 開始
+  else if appState == GAME_STATE_PLAY { GamePlay() }            // プレイ
+  else if appState == GAME_STATE_TIMEUP { GameTimeUp() }        // タイムアップ
+  else if appState == GAME_STATE_OVER { GameOver() }            // オーバー
+  else if appState == GAME_STATE_HISCORE { GameHiscore() }      // ハイスコア
+  else if appState == GAME_STATE_UNLOAD { GameUnload() }        // アンロード
+  else { GameEnd() }                                            // 終了
+  // 一時停止
+  if (gameFlag & (1 << GAME_FLAG_PAUSE)) != 0 { return }
+  BackUpdate()                                // 背景の更新
+  ShipUpdate()                                // 自機の更新
+  ShotUpdate()                                // ショットの更新
+  EnemyUpdate()                               // 敵の更新
+  BulletUpdate()                              // 弾の更新
+  // ステータスの更新
+  if (gameFlag & (1 << GAME_FLAG_STATUS)) != 0 { BackTransferStatus() }
+}
+
+// ゲームを初期化する
+fn GameInitialize() {
+  SystemClearSprite()                         // スプライトのクリア
+  for i in 0..4 { soundRequest[i] = &mmlNull }                  // 演奏の停止
+  for i in 0..6 { appScore[i] = 0 }           // 現在のスコアの初期化
+  // スコアの倍率の初期化
+  appRate[0] = 0
+  appRate[1] = 1
+  appRate[2] = 0
+  appRate[3] = 0
+  // タイマの初期化
+  appTimer[0] = 0x03
+  appTimer[1] = 0
+  appTimer[2] = 0
+  appTimer[3] = 0
+  ShipInitialize()                            // 自機の初期化
+  ShotInitialize()                            // ショットの初期化
+  EnemyInitialize()                           // 敵の初期化
+  BulletInitialize()                          // 弾の初期化
+  gameFlag = 0                                // フラグの初期化
+  gameShootDown = 0                           // 倒した数の初期化
+  // 状態の更新
+  appState = GAME_STATE_LOAD
+  appPhase = APP_PHASE_NULL
+}
+
+// ゲームをロードする
+fn GameLoad() {
+  if appPhase == 0 {                          // フェーズ0
+    gameFlag |= 1 << GAME_FLAG_STATUS         // フラグの設定
+    appPhase += 1                             // 状態の更新
+  } else {                                    // フェーズ1 ロードの処理
+    appState = GAME_STATE_START               // 状態の更新
+    appPhase = APP_PHASE_NULL
+  }
+}
+
+// ゲームを開始する
+fn GameStart() {
+  if appPhase == 0 {                          // 初期化
+    BackStoreMessage(BACK_MESSAGE_START)      // メッセージのロード
+    // 演奏の開始
+    soundRequest[0] = &mmlStartChannel0
+    soundRequest[1] = &mmlStartChannel1
+    soundRequest[2] = &mmlStartChannel2
+    // フラグの設定
+    gameFlag &= ((1 << GAME_FLAG_PLAYABLE) | (1 << GAME_FLAG_PAUSE) | (1 << GAME_FLAG_STATUS)) ^ 0xff
+    appPhase += 1                             // 状態の更新
+  }
+  if soundRequest[0] != 0 || soundPlay[0] != 0 { return }
+  // 演奏の終了
+  BackRestoreMessage()                        // メッセージのアンロード
+  appState = GAME_STATE_PLAY                  // 状態の更新
+  appPhase = APP_PHASE_NULL
+}
+
+// タイマとスコアの倍率を更新する
+fn GamePlay2() {
+  // タイマの更新
+  if (appTimer[0] | appTimer[1] | appTimer[2] | appTimer[3]) != 0 {
+    appTimer[3] -= 1
+    if appTimer[3] == 255 {
+      appTimer[3] = 9
+      appTimer[2] -= 1
+      if appTimer[2] == 255 {
+        appTimer[2] = 9
+        appTimer[1] -= 1
+        if appTimer[1] == 255 {
+          appTimer[1] = 9
+          appTimer[0] -= 1
+          if appTimer[0] == 255 { appTimer[0] = 0 }
+        }
+      }
+    }
+  }
+  gameShootDown = 0                           // 倒した数の設定
+  GameCheckShotEnemy()                        // ショットと敵のヒットチェック
+  GameCheckShipBullet()                       // 自機と弾のヒットチェック
+  GameCheckShipEnemy()                        // 自機と敵のヒットチェック
+  // スコアの倍率の更新
+  var a: u8 = gameShootDown
+  if a != 0 {
+    a += appRate[1]
+    appRate[1] = a
+    if a >= 0x0a {
+      appRate[1] = a - 0x0a
+      appRate[0] += 1
+      if appRate[0] >= 0x0a {
+        appRate[0] = 9
+        appRate[1] = 9
+        appRate[2] = 9
+      }
+    }
+  } else if (appRate[0] | appRate[2] | appRate[3]) != 0 || appRate[1] != 1 {
+    appRate[3] -= 1
+    if appRate[3] == 255 {
+      appRate[3] = 1
+      appRate[2] -= 1
+      if appRate[2] == 255 {
+        appRate[2] = 9
+        appRate[1] -= 1
+        if appRate[1] == 255 {
+          appRate[1] = 9
+          appRate[0] -= 1
+        }
+      }
+    }
+  }
+}
+
+// スコアを更新する
+fn GamePlay3() {
+  var b: u8 = gameShootDown
+  while b != 0 {
+    appScore[5] += appRate[2]
+    if appScore[5] >= 0x0a {
+      appScore[5] -= 0x0a
+      appScore[4] += 1
+    }
+    appScore[4] += appRate[1]
+    if appScore[4] >= 0x0a {
+      appScore[4] -= 0x0a
+      appScore[3] += 1
+    }
+    appScore[3] += appRate[0]
+    if appScore[3] >= 0x0a {
+      appScore[3] -= 0x0a
+      appScore[2] += 1
+      if appScore[2] >= 0x0a {
+        appScore[2] -= 0x0a
+        appScore[1] += 1
+        if appScore[1] >= 0x0a {
+          appScore[1] -= 0x0a
+          appScore[0] += 1
+          if appScore[0] >= 0x0a { for i in 0..6 { appScore[i] = 9 } }
+        }
+      }
+    }
+    b -= 1
+  }
+}
+
+// ゲームをプレイする
+fn GamePlay() {
+  if appPhase == 0 {                          // 初期化
+    // フラグの設定
+    gameFlag &= (1 << GAME_FLAG_PAUSE) ^ 0xff
+    gameFlag |= (1 << GAME_FLAG_PLAYABLE) | (1 << GAME_FLAG_STATUS)
+    appPhase += 1                             // 状態の更新
+  }
+  // プレイの処理
+  if input[INPUT_BUTTON_ESC] == 0x01 {        // START ボタンが押された
+    flag ^= 1 << FLAG_SOUND_SLEEP             // スリープフラグをフリップ
+    gameFlag ^= 1 << GAME_FLAG_PAUSE          // ポーズフラグをフリップ
+  }
+  if (gameFlag & (1 << GAME_FLAG_PAUSE)) != 0 { return }        // 一時停止
+  GamePlay2()
+  GamePlay3()
+  // タイムアップ
+  if (appTimer[0] | appTimer[1] | appTimer[2] | appTimer[3]) != 0 { return }
+  // 状態の更新
+  appState = GAME_STATE_TIMEUP
+  appPhase = APP_PHASE_NULL
+}
+
+// ゲームがタイムアップする
+fn GameTimeUp() {
+  if appPhase == 0 {
+    BackStoreMessage(BACK_MESSAGE_TIMEUP)     // メッセージのロード
+    gameCount = 180                           // カウントの設定
+    // フラグの設定
+    gameFlag &= ((1 << GAME_FLAG_PLAYABLE) | (1 << GAME_FLAG_PAUSE) | (1 << GAME_FLAG_STATUS)) ^ 0xff
+    appPhase += 1                             // 状態の更新
+  }
+  // カウントの更新
+  gameCount -= 1
+  if gameCount != 0 { return }
+  // 更新
+  for i in 0..6 {                             // ハイスコアを更新したかどうか
+    if appScore[i] < appHiscore[i] {          // ゲームオーバー
+      // 状態の更新
+      appState = GAME_STATE_OVER
+      appPhase = APP_PHASE_NULL
+      return
+    }
+    if appScore[i] > appHiscore[i] { break }
+  }
+  // ハイスコアの更新
+  for i in 0..6 { appHiscore[i] = appScore[i] }
+  BackTransferHiscore()
+  // 状態の更新
+  appState = GAME_STATE_HISCORE
+  appPhase = APP_PHASE_NULL
+}
+
+// ゲームオーバーになる
+fn GameOver() {
+  if appPhase == 0 {                          // 初期化
+    BackStoreMessage(BACK_MESSAGE_GAMEOVER)   // メッセージのロード
+    gameCount = 180                           // カウントの設定
+    // フラグの設定
+    gameFlag &= ((1 << GAME_FLAG_PLAYABLE) | (1 << GAME_FLAG_PAUSE) | (1 << GAME_FLAG_STATUS)) ^ 0xff
+    appPhase += 1                             // 状態の更新
+  }
+  // カウントの更新
+  gameCount -= 1
+  if gameCount == 0 {
+    BackRestoreMessage()                      // メッセージのアンロード
+    // 状態の更新
+    appState = GAME_STATE_UNLOAD
+    appPhase = APP_PHASE_NULL
+  }
+}
+
+// ハイスコアを更新する
+fn GameHiscore() {
+  if appPhase == 0 {                          // 初期化
+    BackStoreMessage(BACK_MESSAGE_HISCORE)    // メッセージのロード
+    // 演奏の開始
+    soundRequest[0] = &mmlHiScoreChannel0
+    soundRequest[1] = &mmlHiScoreChannel1
+    soundRequest[2] = &mmlHiScoreChannel2
+    // フラグの設定
+    gameFlag &= ((1 << GAME_FLAG_PLAYABLE) | (1 << GAME_FLAG_PAUSE) | (1 << GAME_FLAG_STATUS)) ^ 0xff
+    appPhase += 1                             // 状態の更新
+  }
+  // ハイスコアの処理
+  if soundRequest[0] == 0 && soundPlay[0] == 0 {                // 演奏の終了
+    BackRestoreMessage()                      // メッセージのアンロード
+    appState = GAME_STATE_UNLOAD              // 状態の更新
+    appPhase = APP_PHASE_NULL
+  }
+}
+
+// ゲームをアンロードする
+fn GameUnload() {
+  if appPhase == 0 {                          // 初期化
+    gameFlag = 0                              // フラグの設定
+    appPhase += 1                             // 状態の更新
+  }
+  appState = GAME_STATE_END                   // 状態の更新
+}
+
+// ゲームを終了する
+fn GameEnd() {
+  appMode = APP_MODE_TITLE                    // モードの更新
+  appState = APP_STATE_NULL                   // 状態の更新
+  appPhase = APP_PHASE_NULL
+}
+
+// 敵を倒す（ショットや自機に当たった）
+fn GameBreakEnemy(ix: *Enemy) {
+  gameShootDown += 1                          // 倒した数の更新
+  ix.nodamage = 0x80                          // 敵のノーダメージの更新
+  ix.state = ENEMY_STATE_BOMB                 // 敵の状態の更新
+  ix.phase = APP_PHASE_NULL
+}
+
+// ショットと敵のヒットチェックを行う
+fn GameCheckShotEnemy() {
+  for c in 0..SHOT_SIZE {                     // ショットの走査
+    if shot[c].state == SHOT_STATE_NULL { continue }            // ショットの存在
+    for b in 0..ENEMIES_SIZE {                // 敵の走査
+      if enemies[b].nodamage != 0 { continue }                  // 敵の存在
+      // ヒットチェック
+      var a: i8 = ((enemies[b].x >> 8) as u8 - shot[c].x) as i8
+      if !(a >= -7 && a < 8) { continue }
+      a = ((enemies[b].y >> 8) as u8 - shot[c].y) as i8
+      if !(a >= -10 && a < 0x0b) { continue }
+      // あたり
+      GameBreakEnemy(enemies[b])
+      GameShootBack(enemies[b])               // 敵の撃ち返し
+      shot[c].state = SHOT_STATE_NULL         // ショットの状態の更新
+      shot[c].phase = APP_PHASE_NULL
+    }
+  }
+}
+
+// 自機と弾のヒットチェックを行う
+// 座標の差は、符号なし 8 ビットの差の絶対値（元のアセンブラ版。C 版は i8 にしていて、座標が 128 以上で結果が変わる）
+fn GameCheckShipBullet() {
+  if ship.nodamage != 0 { return }            // 自機の存在
+  for b in 0..BULLET_SIZE {                   // 弾の走査
+    if bullets[b].state == BULLET_STATE_NULL { continue }       // 弾の存在
+    // ヒットチェック
+    var bx: u8 = (bullets[b].x >> 8) as u8
+    var a: u8 = bx - ship.x
+    if bx < ship.x { a = ship.x - bx }
+    if a >= 6 { continue }
+    var by: u8 = (bullets[b].y >> 8) as u8
+    a = by - ship.y
+    if by < ship.y { a = ship.y - by }
+    if a >= 6 { continue }
+    bullets[b].state = BULLET_STATE_NULL      // 弾の状態の更新
+    ship.state = SHIP_STATE_BOMB              // 自機の状態の更新
+    ship.phase = APP_PHASE_NULL
+  }
+}
+
+// 自機と敵のヒットチェックを行う
+fn GameCheckShipEnemy() {
+  if ship.nodamage != 0 { return }            // 自機の存在
+  for b in 0..ENEMIES_SIZE {                  // 敵の走査
+    if enemies[b].nodamage != 0 { continue }  // 敵の存在
+    // ヒットチェック X
+    var a: i16 = ((enemies[b].x >> 8) as i16) - (ship.x as i16)
+    if a < 0 { a = -a }
+    if a >= 8 { continue }
+    // ヒットチェック Y
+    a = ((enemies[b].y >> 8) as i16) - (ship.y as i16)
+    if a < 0 { a = -a }
+    if a >= 8 { continue }
+    // 更新
+    GameBreakEnemy(enemies[b])
+    ship.state = SHIP_STATE_BOMB              // 自機の状態の更新
+    ship.phase = APP_PHASE_NULL
+  }
+}
+
+// 撃ち返しの向きと弾の位置を決める
+fn getvec(ix: *Enemy) {
+  // ベクトルの取得
+  var exi: u8 = (ix.x >> 8) as u8
+  var x: i8 = (ship.x - exi) as i8
+  var y: u8 = ship.y - ((ix.y >> 8) as u8)
+  // 必ず下向きに撃ち返す
+  if (y & (1 << 7)) != 0 {
+    y = y >> 1
+    x = x >> 1
+  }
+  var hl: u16 = (((x as u8) as u16) << 8) | y
+  // 方向の取得
+  gameBackAngle = SystemGetAtan2(hl)
+  // 弾の位置の設定
+  bulletEntry.x = ix.x
+  bulletEntry.y = ix.y
+}
+
+// 5 方向に撃ち返す弾を作る
+fn b() {
+  for c in 0..5 {                             // 弾のエントリ
+    // メインの処理
+    bulletEntry.sprite_src = backTypeTable[c]
+    var a: u8 = gameBackAngle + backAngleTable[c]
+    gameBackCos = SystemGetCos(a)
+    gameBackSin = SystemGetSin(a)
+    bulletEntry.spx = 0
+    bulletEntry.spy = 0
+    var hl: u16 = ((c as u16) << 1) + ((appTimer[0] as u16) << 4)
+    var d: u8 = backSpeedTable[hl]
+    while d != 0 {
+      bulletEntry.spx += gameBackCos
+      bulletEntry.spy += gameBackSin
+      d -= 1
+    }
+    var e: u8 = backSpeedTable[hl + 1]
+    if e != 0 {
+      gameBackCos = gameBackCos >> 1
+      gameBackSin = gameBackSin >> 1
+      while e != 0 {
+        bulletEntry.spx += gameBackCos
+        bulletEntry.spy += gameBackSin
+        e -= 1
+      }
+    }
+    BulletEntry()
+  }
+}
+
+// 敵が弾を打ち返す
+fn GameShootBack(ix: *Enemy) {
+  // 敵が自機に近い場合は撃ち返さない
+  var exi: u8 = (ix.x >> 8) as u8
+  if ship.y - 0x20 < (ix.y >> 8) as u8 {
+    var a: u8 = ship.x - 0x18
+    var top: u8 = a + 0x30                    // 8 ビットで丸める（元のアセンブラ版）
+    if a < exi && exi <= top { return }
+  }
+  getvec(ix)
+  b()
+}

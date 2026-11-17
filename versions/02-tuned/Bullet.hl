@@ -1,0 +1,97 @@
+// Bullet.hl : Bullet.c / Bullet.h の写し。ゲーム画面／弾。
+
+import "System.hl"
+import "App.hl"
+import "Game.hl"
+
+// マクロの定義
+// 弾
+const BULLET_SIZE = 18
+// 状態
+const BULLET_STATE_NULL = 0
+const BULLET_STATE_MOVE = 1
+
+// x, y, spx, spy は 8.8 の固定小数点数（上位バイトが画面の座標）。
+// sprite_src は弾の絵の番地。bulletEntry では「弾の種類」を入れる（元の sprite_src_l）
+struct Bullet { state: u8, x: u16, y: u16, spx: i16, spy: i16, sprite_src: u16, sprite_offset: u8 }
+
+// 定数の定義
+data bulletSpriteTable: u8 = [                // 弾データ（y, x, パターン, 色）
+  0xf8, 0xf8, 0x40, 0x06,
+  0xf8, 0xf8, 0x40, 0x04,
+]
+
+// 変数の定義
+var bullets: [Bullet; BULLET_SIZE]            // パラメータ
+var bulletEntry: Bullet                       // エントリ
+var bulletSpriteOffset: [u8; 2]               // スプライトオフセット
+
+// 弾を初期化する
+fn BulletInitialize() {
+  var c: u8 = 0
+  for i in 0..BULLET_SIZE {                   // 弾の走査
+    bullets[i].sprite_offset = c              // スプライトの設定（BulletUpdate が順に数えるので、今は使わない。元との対応のため残す）
+    bullets[i].state = BULLET_STATE_NULL      // 状態の設定
+    c += 4
+  }
+  bulletSpriteOffset[0] = 0                   // スプライトオフセットの初期化
+  bulletSpriteOffset[1] = GAME_SPRITE_BULLET
+}
+
+// 弾を更新する
+// 弾の sprite の位置は、(先頭のオフセット + 4 * 番号) を 72 で丸めたもの。元は弾ごとに計算するが、順に 4 ずつ進めて持ち歩く
+fn BulletUpdate() {
+  var a: u8 = bulletSpriteOffset[0]
+  // TODO(コンパイラ): `&sprites + a + off`（u16 + u8 + u8）を 1 式で書くと gen.ml が String.sub で落ちる。1 つずつ足して回避
+  var base: u16 = &sprites
+  base += bulletSpriteOffset[1]
+  for b in 0..BULLET_SIZE {                   // 弾の走査
+    var at: u16 = base
+    at += a
+    if bullets[b].state == BULLET_STATE_NULL { BulletNull(at) }   // なし
+    else { BulletMove(bullets[b], at) }                           // 移動
+    a += 4
+    if a >= BULLET_SIZE * 0x04 { a -= BULLET_SIZE * 0x04 }
+  }
+  // スプライトオフセットの更新
+  bulletSpriteOffset[0] += 4
+  if bulletSpriteOffset[0] >= BULLET_SIZE * 0x04 { bulletSpriteOffset[0] = 0 }
+  bulletSpriteOffset[1] = GAME_SPRITE_BULLET_OFFSET - bulletSpriteOffset[1]
+}
+
+// 弾はなし
+fn BulletNull(at: u16) {
+  SystemHideSprite(at)                        // 描画の開始
+}
+
+// 弾が移動する
+fn BulletMove(ix: *Bullet, at: u16) {
+  // TODO(コンパイラ): 構造体の 16 ビットの欄の足し算（`ix.x += ix.spx`）が 1 回 250T 前後。一時変数への退避を何度も挟み、ix + n も毎回作り直す。
+  //   アセンブラ版は (ix+n) を直接使い 100T 前後。HL の base+offset の共通化と、退避の削減が効く
+  ix.x += ix.spx as u16                       // 移動
+  ix.y += ix.spy as u16
+  var xi: u8 = (ix.x >> 8) as u8
+  var yi: u8 = (ix.y >> 8) as u8
+  if xi >= 0xc4 || yi >= 0xc4 { ix.state = BULLET_STATE_NULL }    // 状態の更新
+  // 描画の開始
+  if 0xe0 <= xi && xi < 0xf8 {
+    SystemHideSprite(at)
+    return
+  }
+  SystemSetSprite(ix.sprite_src, at, yi, xi)
+}
+
+// 弾をエントリする
+fn BulletEntry() {
+  for b in 0..BULLET_SIZE {                   // 弾の走査
+    if bullets[b].state == BULLET_STATE_NULL {
+      bullets[b].x = bulletEntry.x            // 位置の設定
+      bullets[b].y = bulletEntry.y
+      bullets[b].spx = bulletEntry.spx        // 速度の設定
+      bullets[b].spy = bulletEntry.spy
+      bullets[b].sprite_src = &bulletSpriteTable + (bulletEntry.sprite_src << 2)    // スプライトの設定（BulletUpdate が順に数えるので、今は使わない。元との対応のため残す）
+      bullets[b].state = BULLET_STATE_MOVE    // 状態の更新
+      return
+    }
+  }
+}

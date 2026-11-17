@@ -1,0 +1,6 @@
+[submodule "orig/damaxian-msx"]
+	path = orig/damaxian-msx
+	url = https://github.com/CoBinee/damaxian-msx
+[submodule "orig/damaxian_msx"]
+	path = orig/damaxian_msx
+	url = https://github.com/hsk/damaxian_msx

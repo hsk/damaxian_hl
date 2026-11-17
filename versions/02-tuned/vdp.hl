@@ -1,0 +1,21 @@
+// vdp.hl : vdp.h の写し。VDP のレジスタ番号と、使うビット。
+
+const VDP_R0 = 0
+const VDP_R0_M2 = 1
+const VDP_R1 = 1
+const VDP_R1_4_16K = 7
+const VDP_R1_BL = 6               // 画面の表示
+const VDP_R1_GINT = 5             // 割り込み
+const VDP_R1_M1 = 4
+const VDP_R1_M3 = 3
+const VDP_R1_SI = 1               // スプライトのサイズ（16x16）
+const VDP_R1_MAG = 0
+const VDP_R2 = 2
+const VDP_R3 = 3
+const VDP_R4 = 4
+const VDP_R5 = 5
+const VDP_R6 = 6
+const VDP_R7 = 7
+
+// BIOS のワークエリア（VDP レジスタの控え）
+const RG0SAV = 0xf3df

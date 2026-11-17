@@ -1,0 +1,95 @@
+// Title.hl : Title.c / Title.h の写し。タイトル画面。
+
+import "System.hl"
+import "Sound.hl"
+import "Math.hl"
+import "App.hl"
+import "Back.hl"
+
+// 状態
+const TITLE_STATE_INIT = 0
+const TITLE_STATE_LOAD = 1
+const TITLE_STATE_LOOP = 2
+const TITLE_STATE_UNLOAD = 3
+const TITLE_STATE_END = 4
+
+// 定数の定義
+data titleColorAnimationTable: u8 = [ 0xf1, 0x41, 0x61, 0xa1 ]    // カラーアニメーションテーブル
+
+// 変数の定義
+var titleCount: u8                            // カウント
+var titleColorTable: [u8; 8]
+
+// タイトルを更新する
+fn TitleUpdate() {
+  if appState == TITLE_STATE_INIT { TitleInit() }               // 初期化
+  else if appState == TITLE_STATE_LOAD { TitleLoad() }          // ロード
+  else if appState == TITLE_STATE_LOOP { TitleLoop() }          // 待機
+  else if appState == TITLE_STATE_UNLOAD { TitleUnload() }      // アンロード
+  else { TitleEnd() }                                           // 終了
+  BackUpdate()                                // 背景の更新
+}
+
+// タイトルを初期化する
+fn TitleInit() {
+  SystemClearSprite()                         // スプライトのクリア
+  for i in 0..4 { soundRequest[i] = &mmlNull }  // 演奏の停止
+  appState = TITLE_STATE_LOAD                 // 状態の更新
+}
+
+// タイトルをロードする
+fn TitleLoad() {
+  BackStoreLogo()                             // ロゴのロード
+  appState = TITLE_STATE_LOOP                 // 状態の更新
+  appPhase = APP_PHASE_NULL
+}
+
+// タイトルを待機する
+fn TitleLoop() {
+  if appPhase == 0 {                          // 初期化
+    titleCount = 0x01                         // ロゴの初期化
+    appPhase += 1
+  }
+  var waiting = false                         // 元の do { ... break; } while (0) の break
+  if appPhase == 0x01 {                       // 待機の処理
+    if input[INPUT_BUTTON_SPACE] != 1 { waiting = true }        // SPACE キー
+    else {
+      soundRequest[0] = &mmlTitleStartChannel0                  // 演奏の開始
+      soundRequest[1] = &mmlTitleStartChannel1
+      soundRequest[2] = &mmlTitleStartChannel2
+      appPhase += 1                           // 状態の更新
+    }
+  }
+  if !waiting {
+    if soundRequest[0] != 0 || soundPlay[0] != 0 { waiting = true }   // 待機の完了待ち
+    else {
+      appState = TITLE_STATE_UNLOAD           // ゲームスタート
+      appPhase = APP_PHASE_NULL
+    }
+  }
+  titleCount -= 1                             // ロゴの更新
+  if titleCount != 0 { return }
+  titleCount = 4
+  // カラーの転送の設定
+  for i in 0..8 { titleColorTable[i] = 0xf1 }
+  var color: u8 = titleColorAnimationTable[(SystemGetRandom() >> 3) & 0b00000011]     // 1 つ目の乱数で色
+  videoTransfer[0].src = &titleColorTable
+  titleColorTable[(SystemGetRandom() >> 3) & 0b00000111] = color                      // 2 つ目の乱数で位置
+  videoTransfer[0].dst = VIDEO_GRAPHIC1_COLOR_TABLE + 0x08
+  videoTransfer[0].bytes = 0x08
+  request |= 1 << REQUEST_VRAM                // V-Blank 中の転送の開始
+}
+
+// タイトルをアンロードする
+fn TitleUnload() {
+  BackRestoreLogo()                           // ロゴのアンロード
+  appState = TITLE_STATE_END                  // 状態の更新
+  appPhase = APP_PHASE_NULL
+}
+
+// タイトルを終了する
+fn TitleEnd() {
+  appMode = APP_MODE_GAME                     // モードの更新
+  appState = APP_STATE_NULL                   // 状態の更新
+  appPhase = APP_PHASE_NULL
+}

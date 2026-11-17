@@ -1,0 +1,96 @@
+// Bullet.hl : Bullet.c / Bullet.h の写し。ゲーム画面／弾。
+
+import "System.hl"
+import "App.hl"
+import "Game.hl"
+
+// マクロの定義
+// 弾
+const BULLET_SIZE = 18
+// 状態
+const BULLET_STATE_NULL = 0
+const BULLET_STATE_MOVE = 1
+
+// x, y, spx, spy は 8.8 の固定小数点数（上位バイトが画面の座標）。
+// sprite_src は弾の絵の番地。bulletEntry では「弾の種類」を入れる（元の sprite_src_l）
+struct Bullet { state: u8, x: u16, y: u16, spx: i16, spy: i16, sprite_src: u16, sprite_offset: u8 }
+
+// 定数の定義
+data bulletSpriteTable: u8 = [                // 弾データ（y, x, パターン, 色）
+  0xf8, 0xf8, 0x40, 0x06,
+  0xf8, 0xf8, 0x40, 0x04,
+]
+
+// 変数の定義
+var bullets: [Bullet; BULLET_SIZE]            // パラメータ
+var bulletEntry: Bullet                       // エントリ
+var bulletSpriteOffset: [u8; 2]               // スプライトオフセット
+
+// 弾を初期化する
+fn BulletInitialize() {
+  var c: u8 = 0
+  for i in 0..BULLET_SIZE {                   // 弾の走査
+    bullets[i].sprite_offset = c              // スプライトの設定
+    bullets[i].state = BULLET_STATE_NULL      // 状態の設定
+    c += 4
+  }
+  bulletSpriteOffset[0] = 0                   // スプライトオフセットの初期化
+  bulletSpriteOffset[1] = GAME_SPRITE_BULLET
+}
+
+// 弾を更新する
+fn BulletUpdate() {
+  for b in 0..BULLET_SIZE {                   // 弾の走査
+    if bullets[b].state == BULLET_STATE_NULL { BulletNull(bullets[b]) }   // なし
+    else { BulletMove(bullets[b]) }                                       // 移動
+  }
+  // スプライトオフセットの更新
+  bulletSpriteOffset[0] += 4
+  if bulletSpriteOffset[0] >= BULLET_SIZE * 0x04 { bulletSpriteOffset[0] = 0 }
+  bulletSpriteOffset[1] = GAME_SPRITE_BULLET_OFFSET - bulletSpriteOffset[1]
+}
+
+// この弾の sprite の中の位置
+fn BulletSpriteAt(ix: *Bullet) -> u16 {
+  var a: u8 = bulletSpriteOffset[0] + ix.sprite_offset
+  if a >= BULLET_SIZE * 0x04 { a -= BULLET_SIZE * 0x04 }
+  var at: u16 = a
+  at += bulletSpriteOffset[1]
+  return &sprites + at
+}
+
+// 弾はなし
+fn BulletNull(ix: *Bullet) {
+  SystemHideSprite(BulletSpriteAt(ix))        // 描画の開始
+}
+
+// 弾が移動する
+fn BulletMove(ix: *Bullet) {
+  ix.x += ix.spx as u16                       // 移動
+  ix.y += ix.spy as u16
+  var xi: u8 = (ix.x >> 8) as u8
+  var yi: u8 = (ix.y >> 8) as u8
+  if xi >= 0xc4 || yi >= 0xc4 { ix.state = BULLET_STATE_NULL }    // 状態の更新
+  // 描画の開始
+  var hl: u16 = BulletSpriteAt(ix)
+  if 0xe0 <= xi && xi < 0xf8 {
+    SystemHideSprite(hl)
+    return
+  }
+  SystemSetSprite(ix.sprite_src, hl, yi, xi)
+}
+
+// 弾をエントリする
+fn BulletEntry() {
+  for b in 0..BULLET_SIZE {                   // 弾の走査
+    if bullets[b].state == BULLET_STATE_NULL {
+      bullets[b].x = bulletEntry.x            // 位置の設定
+      bullets[b].y = bulletEntry.y
+      bullets[b].spx = bulletEntry.spx        // 速度の設定
+      bullets[b].spy = bulletEntry.spy
+      bullets[b].sprite_src = &bulletSpriteTable + (bulletEntry.sprite_src << 2)    // スプライトの設定
+      bullets[b].state = BULLET_STATE_MOVE    // 状態の更新
+      return
+    }
+  }
+}

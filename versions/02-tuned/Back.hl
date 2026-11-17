@@ -1,0 +1,199 @@
+// Back.hl : Back.c / Back.h の写し。背景（パターンネームテーブル、スコア・倍率・タイマの表示、メッセージ）。
+
+import "System.hl"
+import "Math.hl"
+import "App.hl"
+import "bg.hl"
+
+// マクロの定義
+// パターンネームテーブルオフセットアドレス
+const BACK_PATTERN_NAME_TABLE_HISCORE = 4 * 0x20 + 25
+const BACK_PATTERN_NAME_TABLE_SCORE = 7 * 0x20 + 25
+const BACK_PATTERN_NAME_TABLE_RATE = 18 * 0x20 + 27
+const BACK_PATTERN_NAME_TABLE_TIMER = 20 * 0x20 + 27
+const BACK_PATTERN_NAME_TABLE_LOGO = 10 * 0x20 + 4
+const BACK_PATTERN_NAME_TABLE_MESSAGE = 12 * 0x20 + 4
+// メッセージ
+const BACK_MESSAGE_START = 0
+const BACK_MESSAGE_TIMEUP = 1
+const BACK_MESSAGE_GAMEOVER = 2
+const BACK_MESSAGE_HISCORE = 3
+
+// 定数の定義
+data backColorTable: u8 = [                   // カラーテーブル
+  0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1,
+  0x01, 0x01, 0x51, 0x51, 0x91, 0x91, 0xb1, 0xb1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1,
+]
+data backColorAnimationTable: u8 = [
+  0x01, 0x01, 0xf1, 0xf1, 0x91, 0x91, 0xb1, 0xb1,
+  0x01, 0x01, 0x51, 0x51, 0xf1, 0xf1, 0xb1, 0xb1,
+  0x01, 0x01, 0x51, 0x51, 0x91, 0x91, 0xf1, 0xf1,
+  0x01, 0x01, 0x51, 0x51, 0x91, 0x91, 0xb1, 0xb1,
+  0x01, 0x01, 0xf1, 0xf1, 0xb1, 0xb1, 0x51, 0x51,
+  0x01, 0x01, 0x91, 0x91, 0xf1, 0xf1, 0x51, 0x51,
+  0x01, 0x01, 0x91, 0x91, 0xb1, 0xb1, 0xf1, 0xf1,
+  0x01, 0x01, 0x91, 0x91, 0xb1, 0xb1, 0x51, 0x51,
+  0x01, 0x01, 0xf1, 0xf1, 0x51, 0x51, 0x91, 0x91,
+  0x01, 0x01, 0xb1, 0xb1, 0xf1, 0xf1, 0x91, 0x91,
+  0x01, 0x01, 0xb1, 0xb1, 0x51, 0x51, 0xf1, 0xf1,
+  0x01, 0x01, 0xb1, 0xb1, 0x51, 0x51, 0x91, 0x91,
+  0x01, 0x01, 0xf1, 0xf1, 0x91, 0x91, 0xb1, 0xb1,
+  0x01, 0x01, 0x51, 0x51, 0xf1, 0xf1, 0xb1, 0xb1,
+  0x01, 0x01, 0x51, 0x51, 0x91, 0x91, 0xf1, 0xf1,
+  0x01, 0x01, 0x51, 0x51, 0x91, 0x91, 0xb1, 0xb1,
+]
+
+// 変数の定義
+var hiscorePatternNameTable: [u8; 6]          // ハイスコア
+var scorePatternNameTable: [u8; 6]            // 現在のスコア
+var ratePatternNameTable: [u8; 4]             // スコアの倍率
+var timerPatternNameTable: [u8; 4]            // タイマ
+var backCount: u8                             // カウント
+
+// 背景をロードする
+fn BackLoad() {
+  BackLoadPatternNameTable()                  // パターンネームテーブルのロード
+  BackLoadColorTable()                        // カラーテーブルのロード
+  BackMakeHiscorePatternNameTable()           // ハイスコアの作成
+  LoadVram(VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_HISCORE, &hiscorePatternNameTable, 6)
+  BackMakeScorePatternNameTable()             // 現在のスコアの作成
+  LoadVram(VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_SCORE, &scorePatternNameTable, 6)
+  BackMakeRatePatternNameTable()              // スコアの倍率の作成
+  LoadVram(VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_RATE, &ratePatternNameTable, 4)
+  BackMakeTimerPatternNameTable()             // タイマの作成
+  LoadVram(VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_TIMER, &timerPatternNameTable, 4)
+  backCount = 0x01                            // カウントの初期化
+}
+
+// 背景を更新する（カラーアニメーション）
+fn BackUpdate() {
+  backCount -= 1                              // カウンタの更新
+  if backCount != 0 { return }
+  backCount = 0x18                            // カウンタの再設定
+  var e: u8 = SystemGetRandom() & 0b01111000  // ランダム値
+  videoTransfer[3].src = &backColorAnimationTable + e
+  videoTransfer[3].dst = VIDEO_GRAPHIC1_COLOR_TABLE + 0x10
+  videoTransfer[3].bytes = 0x08
+  request |= 1 << REQUEST_VRAM                // V-Blank 中の転送の開始
+}
+
+// ハイスコアを転送する
+fn BackTransferHiscore() {
+  BackMakeHiscorePatternNameTable()
+  videoTransfer[0].src = &hiscorePatternNameTable
+  videoTransfer[0].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_HISCORE
+  videoTransfer[0].bytes = 0x06
+  request |= 1 << REQUEST_VRAM
+}
+
+// ステータスを転送する
+fn BackTransferStatus() {
+  BackMakeScorePatternNameTable()
+  videoTransfer[0].src = &scorePatternNameTable
+  videoTransfer[0].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_SCORE
+  videoTransfer[0].bytes = 0x06
+  BackMakeRatePatternNameTable()
+  videoTransfer[1].src = &ratePatternNameTable
+  videoTransfer[1].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_RATE
+  videoTransfer[1].bytes = 0x04
+  BackMakeTimerPatternNameTable()
+  videoTransfer[2].src = &timerPatternNameTable
+  videoTransfer[2].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_TIMER
+  videoTransfer[2].bytes = 0x04
+  request |= 1 << REQUEST_VRAM
+}
+
+// ロゴを配置する
+fn BackStoreLogo() {
+  videoTransfer[0].src = &logoPatternNameTable + 0x00
+  videoTransfer[0].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_LOGO + 0x00
+  videoTransfer[0].bytes = 0x10
+  videoTransfer[1].src = &logoPatternNameTable + 0x10
+  videoTransfer[1].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_LOGO + 0x20
+  videoTransfer[1].bytes = 0x10
+  request |= 1 << REQUEST_VRAM
+}
+
+// ロゴの背景を復旧する
+fn BackRestoreLogo() {
+  videoTransfer[0].src = &bg + BACK_PATTERN_NAME_TABLE_LOGO + 0x00
+  videoTransfer[0].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_LOGO + 0x00
+  videoTransfer[0].bytes = 0x10
+  videoTransfer[1].src = &bg + BACK_PATTERN_NAME_TABLE_LOGO + 0x20
+  videoTransfer[1].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_LOGO + 0x20
+  videoTransfer[1].bytes = 0x10
+  request |= 1 << REQUEST_VRAM
+}
+
+// メッセージを配置する
+fn BackStoreMessage(a: u8) {
+  var hl: u16 = &messagePatternNameTable + ((a as u16) << 5)
+  videoTransfer[0].src = hl
+  videoTransfer[1].src = hl + 0x10
+  videoTransfer[0].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_MESSAGE + 0x00
+  videoTransfer[0].bytes = 0x10
+  videoTransfer[1].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_MESSAGE + 0x20
+  videoTransfer[1].bytes = 0x10
+  request |= 1 << REQUEST_VRAM
+}
+
+// メッセージの背景を復旧する
+fn BackRestoreMessage() {
+  videoTransfer[0].src = &bg + BACK_PATTERN_NAME_TABLE_MESSAGE + 0x00
+  videoTransfer[0].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_MESSAGE + 0x00
+  videoTransfer[0].bytes = 0x10
+  videoTransfer[1].src = &bg + BACK_PATTERN_NAME_TABLE_MESSAGE + 0x20
+  videoTransfer[1].dst = VIDEO_GRAPHIC1_PATTERN_NAME_TABLE + BACK_PATTERN_NAME_TABLE_MESSAGE + 0x20
+  videoTransfer[1].bytes = 0x10
+  request |= 1 << REQUEST_VRAM
+}
+
+// パターンネームテーブルを読み込む
+fn BackLoadPatternNameTable() {
+  LoadVram(VIDEO_GRAPHIC1_PATTERN_NAME_TABLE, &bg, 0x300)
+}
+
+// 数字の列を、上の桁の 0 を飛ばしたパターン番号にする（最後の 1 桁は 0 でも出す）。
+// src から n 桁読み、dst に書く。
+fn BackMakeDigits(src: u16, dst: u16, n: u8) {
+  var c: u8 = 0
+  var left: u8 = n - 1
+  while left != 0 {
+    var a: u8 = next(src)
+    if a != 0 { c = 0x10 }                    // 0 以外になったら 0x10 を加えるようにする
+    mem[dst] = a + c
+    dst += 1
+    left -= 1
+  }
+  mem[dst] = mem[src] + 0x10                  // 最後の 1 文字は必ず 0x10 を加える
+}
+
+// ハイスコアのパターンネームテーブルを作成する
+fn BackMakeHiscorePatternNameTable() {
+  BackMakeDigits(&appHiscore, &hiscorePatternNameTable, 6)
+}
+
+// 現在のスコアのパターンネームテーブルを作成する
+fn BackMakeScorePatternNameTable() {
+  BackMakeDigits(&appScore, &scorePatternNameTable, 6)
+}
+
+// スコアの倍率のパターンネームテーブルを作成する（百の位は 0 なら空白、3 文字目は小数点）
+fn BackMakeRatePatternNameTable() {
+  var a: u8 = appRate[0]
+  if a != 0 { a += 0x10 }
+  ratePatternNameTable[0] = a
+  ratePatternNameTable[1] = appRate[1] + 0x10
+  ratePatternNameTable[2] = 0x0e
+  ratePatternNameTable[3] = appRate[2] + 0x10
+}
+
+// タイマのパターンネームテーブルを作成する
+fn BackMakeTimerPatternNameTable() {
+  BackMakeDigits(&appTimer, &timerPatternNameTable, 4)
+}
+
+// カラーテーブルを読み込む
+fn BackLoadColorTable() {
+  LoadVram(VIDEO_GRAPHIC1_COLOR_TABLE, &backColorTable, 0x20)
+}

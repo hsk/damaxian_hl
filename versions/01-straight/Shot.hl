@@ -1,0 +1,68 @@
+// Shot.hl : Shot.c / Shot.h の写し。ゲーム画面／ショット。
+
+import "System.hl"
+import "Sound.hl"
+import "App.hl"
+import "Game.hl"
+import "Ship.hl"
+
+// ショット
+const SHOT_SIZE = 4
+// 状態
+const SHOT_STATE_NULL = 0
+const SHOT_STATE_MOVE = 1
+
+struct Shot { index: u8, state: u8, phase: u8, x: u8, y: u8 }
+
+// 定数の定義
+data shotSpriteTable: u8 = [ 0xfc, 0xf8, 0x08, 0x0f ]         // ショットデータ
+
+// 変数の定義
+var shot: [Shot; SHOT_SIZE]                   // パラメータ
+
+// ショットを初期化する
+fn ShotInitialize() {
+  for c in 0..SHOT_SIZE {                     // ショットの走査
+    shot[c].index = c                         // インデックスの設定
+    shot[c].state = SHOT_STATE_NULL           // 状態の設定
+  }
+}
+
+// ショットを更新する
+fn ShotUpdate() {
+  for b in 0..SHOT_SIZE {                     // ショットの走査
+    if shot[b].state == SHOT_STATE_NULL { ShotNull(shot[b]) }   // なし
+    else { ShotMove(shot[b]) }                                  // 移動
+  }
+}
+
+// ショットはなし
+fn ShotNull(ix: *Shot) {
+  SystemHideSprite(&sprites + GAME_SPRITE_SHOT + ((ix.index as u16) << 2))   // 描画の開始
+}
+
+// ショットが移動する
+fn ShotMove(ix: *Shot) {
+  if ix.phase == 0 {                          // 初期化
+    ix.x = ship.x                             // 位置の初期化
+    ix.y = ship.y
+    soundRequest[0] = &mmlShotChannel0        // 演奏の開始
+    ix.phase += 1                             // 状態の更新
+  }
+  ix.y -= 4                                   // 移動
+  var a: u8 = ix.y
+  if 0xf0 <= a && a < 0xf9 { ix.state = SHOT_STATE_NULL }       // 状態の更新
+  // 描画の開始
+  SystemSetSprite(&shotSpriteTable, &sprites + GAME_SPRITE_SHOT + ((ix.index as u16) << 2), ix.y, ix.x)
+}
+
+// ショットをエントリする
+fn ShotEntry() {
+  for b in 0..SHOT_SIZE {                     // ショットの走査
+    if shot[b].state == SHOT_STATE_NULL {
+      shot[b].state = SHOT_STATE_MOVE
+      shot[b].phase = 0
+      return
+    }
+  }
+}

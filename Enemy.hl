@@ -1,0 +1,258 @@
+// Enemy.hl : Enemy.c / Enemy.h の写し。ゲーム画面／敵。
+
+import "System.hl"
+import "Sound.hl"
+import "Math.hl"
+import "App.hl"
+import "Game.hl"
+import "Ship.hl"
+import "bg.hl"
+
+// 敵
+const ENEMIES_SIZE = 9
+// 状態
+const ENEMY_STATE_NULL = 0
+const ENEMY_STATE_IN = 1
+const ENEMY_STATE_STAY = 2
+const ENEMY_STATE_TURN = 3
+const ENEMY_STATE_APPROACH = 4
+const ENEMY_STATE_BOMB = 5
+
+// x, y は 8.8 の固定小数点数（上位バイトが画面の座標）。xs, ys は待機する位置
+struct Enemy {
+  state: u8, phase: u8, x: u16, y: u16, xs: u8, ys: u8, angle: u8, turn: u8,
+  nodamage: u8, count0: u8, count1: u8, animation: u8, sprite_src: u16, sprite_offset: u8
+}
+
+// 定数の定義
+// 敵データ（待機の長さの mask と加算値）
+data enemyStayTable: u8 = [
+  0x7f, 0x00,
+  0x7f, 0x40,
+  0xff, 0x00,
+  0xff, 0x00,
+]
+data enemySpriteTable: u8 = [
+  0xf8, 0xf8, 0x80, 0x0a,      // 0:→
+  0xf8, 0xf8, 0x84, 0x0a,
+  0xf8, 0xf8, 0x88, 0x0a,      // 0:↓
+  0xf8, 0xf8, 0x8c, 0x0a,
+  0xf8, 0xf8, 0x90, 0x0a,      // 0:←
+  0xf8, 0xf8, 0x94, 0x0a,
+  0xf8, 0xf8, 0x98, 0x0a,      // 0:↑
+  0xf8, 0xf8, 0x9c, 0x0a,
+  0xf8, 0xf8, 0xa0, 0x06,      // 1:→
+  0xf8, 0xf8, 0xa4, 0x06,
+  0xf8, 0xf8, 0xa8, 0x06,      // 1:↓
+  0xf8, 0xf8, 0xac, 0x06,
+  0xf8, 0xf8, 0xb0, 0x06,      // 1:←
+  0xf8, 0xf8, 0xb4, 0x06,
+  0xf8, 0xf8, 0xb8, 0x06,      // 1:↑
+  0xf8, 0xf8, 0xbc, 0x06,
+  0xf8, 0xf8, 0xc0, 0x0d,      // 2:→
+  0xf8, 0xf8, 0xc4, 0x0d,
+  0xf8, 0xf8, 0xc8, 0x0d,      // 2:↓
+  0xf8, 0xf8, 0xcc, 0x0d,
+  0xf8, 0xf8, 0xd0, 0x0d,      // 2:←
+  0xf8, 0xf8, 0xd4, 0x0d,
+  0xf8, 0xf8, 0xd8, 0x0d,      // 2:↑
+  0xf8, 0xf8, 0xdc, 0x0d,
+  0xf8, 0xf8, 0xe0, 0x04,      // 3:→
+  0xf8, 0xf8, 0xe4, 0x04,
+  0xf8, 0xf8, 0xe8, 0x04,      // 3:↓
+  0xf8, 0xf8, 0xec, 0x04,
+  0xf8, 0xf8, 0xf0, 0x04,      // 3:←
+  0xf8, 0xf8, 0xf4, 0x04,
+  0xf8, 0xf8, 0xf8, 0x04,      // 3:↑
+  0xf8, 0xf8, 0xfc, 0x04,
+]
+data enemySpritePatternTable: u8 = [         // 敵ごとの enemySpriteTable の位置
+  0x00, 0x00, 0x20, 0x60, 0x60, 0x20, 0x40, 0x60, 0x40,
+]
+data enemyBombSpriteTable: u8 = [             // 爆発データ
+  0xf8, 0xf8, 0x10, 0x06,
+  0xf8, 0xf8, 0x14, 0x0a,
+  0xf8, 0xf8, 0x18, 0x06,
+  0xf8, 0xf8, 0x1c, 0x0f,
+]
+
+// 変数の定義
+var enemies: [Enemy; ENEMIES_SIZE]            // パラメータ
+var enemySpriteOffset: [u8; 2]                // スプライトオフセット
+
+// 敵を初期化する
+fn EnemyInitialize() {
+  for c in 0..ENEMIES_SIZE {                  // 敵の走査
+    enemies[c].xs = enemyPointTable[(c as u16) << 1]            // 位置の設定
+    enemies[c].ys = enemyPointTable[((c as u16) << 1) + 1]
+    // スプライトの設定
+    enemies[c].sprite_src = &enemySpriteTable + enemySpritePatternTable[c]
+    enemies[c].sprite_offset = c << 2
+    enemies[c].state = ENEMY_STATE_IN         // 状態の設定
+    enemies[c].phase = 0
+  }
+  // スプライトオフセットの初期化
+  enemySpriteOffset[0] = 0
+  enemySpriteOffset[1] = GAME_SPRITE_ENEMY
+}
+
+// 敵を更新する
+// 敵の sprite の位置は、(先頭のオフセット + 4 * 番号) を 36 で丸めたもの。元は敵ごとに計算するが、順に 4 ずつ進めて持ち歩く
+fn EnemyUpdate() {
+  var o: u8 = enemySpriteOffset[0]
+  // TODO(コンパイラ): `&sprites + a + off`（u16 + u8 + u8）を 1 式で書くと gen.ml が String.sub で落ちる。1 つずつ足して回避
+  var base: u16 = &sprites
+  base += enemySpriteOffset[1]
+  for b in 0..ENEMIES_SIZE {                  // 敵の走査
+    var at: u16 = base
+    at += o
+    var a: u8 = enemies[b].state
+    if a == ENEMY_STATE_NULL { EnemyNull(enemies[b], at) }                // なし
+    else if a == ENEMY_STATE_IN { EnemyIn(enemies[b], at) }               // イン
+    else if a == ENEMY_STATE_STAY { EnemyStay(enemies[b], at) }           // 待機
+    else if a == ENEMY_STATE_TURN { EnemyTurn(enemies[b], at) }           // ターン
+    else if a == ENEMY_STATE_APPROACH { EnemyApproach(enemies[b], at) }   // アプローチ
+    else { EnemyBomb(enemies[b], at) }                                    // 爆発
+    o += 4
+    if o >= ENEMIES_SIZE * 0x04 { o -= ENEMIES_SIZE * 0x04 }
+  }
+  // スプライトオフセットの更新
+  var a: u8 = enemySpriteOffset[0] + 4
+  if a >= ENEMIES_SIZE * 0x04 { a = 0 }
+  enemySpriteOffset[0] = a
+  enemySpriteOffset[1] = GAME_SPRITE_ENEMY_OFFSET - enemySpriteOffset[1]
+}
+
+// 敵はなし
+fn EnemyNull(ix: *Enemy, at: u16) {
+  if ix.phase == 0 {                          // 初期化
+    ix.nodamage = 0x80                        // ノーダメージの設定
+    ix.phase += 1                             // 状態の更新
+  }
+  SystemHideSprite(at)         // 描画の開始
+}
+
+// 敵がインする
+fn EnemyIn(ix: *Enemy, at: u16) {
+  if ix.phase == 0 {                          // 初期化
+    ix.x = (ix.xs as u16) << 8                // 位置の設定
+    ix.y = 0xf400
+    ix.angle = 0x40                           // 方向の設定
+    ix.nodamage = 0                           // ノーダメージの設定
+    ix.count0 = 0x40 - ix.ys                  // カウントの設定
+    ix.animation = 0                          // アニメーションの設定
+    ix.phase += 1                             // 状態の更新
+  }
+  // インの処理
+  var yi: u8 = (ix.y >> 8) as u8
+  if ix.count0 != 0 { ix.count0 -= 2 }        // カウントの更新（0 になるまで待つ）
+  else if yi != ix.ys { ix.y += 0x0200 }      // 位置の更新
+  else if ix.angle != 0xc0 { ix.angle -= 8 }  // 方向の更新
+  else {
+    ix.state = ENEMY_STATE_STAY               // 状態の設定
+    ix.phase = 0
+  }
+  EnemyDraw(ix, at)                               // 敵の描画
+}
+
+// 敵が待機する
+fn EnemyStay(ix: *Enemy, at: u16) {
+  if ix.phase == 0 {
+    // カウントの設定
+    var hl: u16 = (appTimer[0] as u16) << 1
+    var a: u8 = SystemGetRandom() & enemyStayTable[hl]
+    a += enemyStayTable[hl + 1]
+    ix.count0 = a
+    ix.count1 = 0x40
+    ix.phase += 1                             // 状態の更新
+  }
+  // 待機の処理
+  if (gameFlag & (1 << GAME_FLAG_PLAYABLE)) != 0 {              // 操作可能かどうか
+    if ix.count0 != 0 { ix.count0 -= 1 }      // カウント0更新
+    else if ix.count1 != 0 { ix.count1 -= 1 } // カウント1更新
+    else {
+      ix.state = ENEMY_STATE_TURN             // 状態の設定
+      ix.phase = 0
+    }
+  }
+  EnemyDraw(ix, at)                               // 敵の描画
+}
+
+// 敵がターンする
+fn EnemyTurn(ix: *Enemy, at: u16) {
+  if ix.phase == 0 {
+    ix.turn = 0x02                            // 回転の設定
+    if (SystemGetRandom() & 0b00010000) == 0 { ix.turn = 0xfe }
+    soundRequest[1] = &mmlEnemyTurnChannel1   // 演奏の開始
+    ix.phase += 1                             // 状態の更新
+  }
+  ix.angle += ix.turn                         // 方向の更新
+  if ix.angle == 0x40 {
+    ix.state = ENEMY_STATE_APPROACH           // 状態の更新
+    ix.phase = 0
+  }
+  // 位置の更新
+  var hl: i16 = SystemGetCos(ix.angle)
+  ix.x += (hl + (hl >> 1)) as u16             // X 方向は x1.5 の移動
+  ix.y += (SystemGetSin(ix.angle) << 1) as u16                  // Y 方向は x2.0 の移動
+  EnemyDraw(ix, at)
+}
+
+// 敵がアプローチする
+fn EnemyApproach(ix: *Enemy, at: u16) {
+  if ix.phase == 0 { ix.phase += 1 }          // 状態の更新
+  // 方向の更新
+  var a: u8 = (ix.x >> 8) as u8
+  var b: u8 = ship.x
+  if a >= 0xe0 { a = 0xfe }
+  else if a == b { a = 0 }
+  else if a < b { a = 0xfe }
+  else { a = 0x02 }
+  a += ix.angle
+  if a < 0x22 { a = 0x22 }
+  else if a > 0x5e { a = 0x5e }
+  ix.angle = a
+  // 位置の更新
+  ix.x += (SystemGetCos(ix.angle) << 1) as u16
+  ix.y += (SystemGetSin(ix.angle) << 1) as u16
+  if (ix.y >> 8) as u8 >= 0xc8 {
+    ix.state = ENEMY_STATE_IN
+    ix.phase = 0
+  }
+  EnemyDraw(ix, at)                               // 敵の描画
+}
+
+// 敵が爆発する
+fn EnemyBomb(ix: *Enemy, at: u16) {
+  if ix.phase == 0 {                          // 初期化処理
+    ix.nodamage = 0x80                        // ノーダメージの設定
+    ix.animation = 0                          // アニメーションの設定
+    soundRequest[2] = &mmlEnemyBombChannel2   // 演奏の開始
+    ix.phase += 1                             // 状態の更新
+  }
+  // アニメーションの更新
+  ix.animation += 1
+  // 状態の更新
+  if ix.animation == 0x1f {
+    ix.state = ENEMY_STATE_IN
+    ix.phase = 0
+  }
+  // 描画の開始
+  SystemSetSprite(&enemyBombSpriteTable + ((ix.animation & 0b00011000) >> 1),
+    at, (ix.y >> 8) as u8, (ix.x >> 8) as u8)
+}
+
+// 敵を描画する
+fn EnemyDraw(ix: *Enemy, at: u16) {
+  ix.animation += 1                           // アニメーションの更新
+  // 描画の開始
+  var hl: u16 = ix.sprite_src
+  hl += ((ix.angle + 0x20) & 0b11000000) >> 3
+  hl += (ix.animation & 0b00001000) >> 1
+  var b: u8 = (ix.x >> 8) as u8
+  if 0xe0 <= b && b < 0xf8 {
+    SystemHideSprite(at)
+    return
+  }
+  SystemSetSprite(hl, at, (ix.y >> 8) as u8, b)
+}

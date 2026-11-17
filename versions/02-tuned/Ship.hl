@@ -1,0 +1,98 @@
+// Ship.hl : Ship.c / Ship.h の写し。ゲーム画面／自機。
+
+import "System.hl"
+import "Sound.hl"
+import "App.hl"
+import "Game.hl"
+import "Shot.hl"
+
+// 状態
+const SHIP_STATE_NULL = 0
+const SHIP_STATE_PLAY = 1
+const SHIP_STATE_BOMB = 2
+
+struct Ship { state: u8, phase: u8, x: u8, y: u8, nodamage: u8, animation: u8 }
+
+// 定数の定義
+data shipSpriteTable: u8 = [                  // 自機データ（y, x, パターン, 色）
+  0xf8, 0xf8, 0x00, 0x0f,
+  0xf8, 0xf8, 0x04, 0x0f,
+]
+data shipBombSpriteTable: u8 = [              // 爆発データ
+  0xf8, 0xf8, 0x10, 0x06,
+  0xf8, 0xf8, 0x14, 0x0a,
+  0xf8, 0xf8, 0x18, 0x06,
+  0xf8, 0xf8, 0x1c, 0x0f,
+]
+
+// 変数の定義
+var ship: Ship                                // パラメータ
+
+// 自機を初期化する
+fn ShipInitialize() {
+  ship.state = SHIP_STATE_PLAY                // 状態の設定
+  ship.phase = 0
+}
+
+// 自機を更新する
+fn ShipUpdate() {
+  var a: u8 = ship.state
+  if a == SHIP_STATE_NULL { ShipNull() }      // 自機はなし
+  else if a == SHIP_STATE_PLAY { ShipPlay() } // 操作
+  else { ShipBomb() }                         // 爆発
+}
+
+// 自機はなし
+fn ShipNull() {
+  if ship.phase == 0 {                        // 初期化
+    ship.nodamage = 0x80                      // ノーダメージの設定
+    ship.phase += 1                           // 状態の更新
+  }
+  SystemHideSprite(&sprites + GAME_SPRITE_SHIP)  // 描画の開始
+}
+
+// 自機を操作する
+fn ShipPlay() {
+  if ship.phase == 0 {                        // 初期化
+    ship.x = 0x60                             // 位置の設定
+    ship.y = 0xc8
+    ship.nodamage = 0x80                      // ノーダメージの設定
+    ship.phase += 1                           // 状態の更新
+  }
+  if ship.nodamage != 0 { ship.nodamage -= 1 }  // ノーダメージの更新
+  // 自機を定位置に移動
+  if ship.y >= 0xb1 {
+    ship.y -= 1
+  } else if (gameFlag & (1 << GAME_FLAG_PLAYABLE)) != 0 {      // 操作可能かどうか
+    // Ｘ方向の移動
+    if input[INPUT_KEY_LEFT] != 0 {           // ←が押された
+      if ship.x >= 0x8 + 2 { ship.x -= 2 }
+    } else if input[INPUT_KEY_RIGHT] != 0 {   // →が押された
+      if ship.x < 0xb8 { ship.x += 2 }
+    }
+    // 発射処理
+    if input[INPUT_BUTTON_SPACE] == 1 { ShotEntry() }          // A ボタンが押された
+  }
+  // 描画の開始
+  SystemSetSprite(&shipSpriteTable + ((ship.nodamage & 0b00000010) << 1),
+    &sprites + GAME_SPRITE_SHIP, ship.y, ship.x)
+}
+
+// 自機が爆発する
+fn ShipBomb() {
+  if ship.phase == 0 {                        // 初期化
+    ship.nodamage = 0x80                      // ノーダメージの設定
+    ship.animation = 0                        // アニメーションの設定
+    soundRequest[0] = &mmlBombChannel0        // 演奏の開始
+    ship.phase += 1                           // 状態の更新
+  }
+  // アニメーションの更新
+  ship.animation += 1
+  if ship.animation == 0x1f {
+    ship.state = SHIP_STATE_PLAY              // 状態の更新
+    ship.phase = 0
+  }
+  // 描画の開始
+  SystemSetSprite(&shipBombSpriteTable + ((ship.animation & 0b00011000) >> 1),
+    &sprites + GAME_SPRITE_SHIP, ship.y, ship.x)
+}
