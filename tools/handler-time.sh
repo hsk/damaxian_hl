@@ -11,24 +11,32 @@ ROOT=$(cd "${HLANG:-$HERE/../../hlang}" && pwd)          # HLang のリポジト
 DIR=$(cd "${1:-$HERE/..}" && pwd)
 TMP=$(mktemp -d)
 cd "$DIR" || exit 1
-export HLANG_LIB=$ROOT/lib
-HLC=$ROOT/_build/default/bin/hlc.exe
-$HLC main.hl >/dev/null || exit 1
-ASM=$($HLC main.hl --asm 2>&1)
-eq() { echo "$ASM" | sed -n "s/^$1: equ \(0x[0-9a-f]*\)/\1/p"; }
+if [ -n "$BIN" ]; then
+  # アセンブラ版や SDCC 版の BLOAD 形式のファイル（tools/bin-time.sh から）。番地は BCNT RND INP FLAG で渡す
+  SDCC=1; CART=""
+else
+  export HLANG_LIB=$ROOT/lib
+  HLC=$ROOT/_build/default/bin/hlc.exe
+  $HLC main.hl >/dev/null || exit 1
+  ASM=$($HLC main.hl --asm 2>&1)
+  eq() { echo "$ASM" | sed -n "s/^$1: equ \(0x[0-9a-f]*\)/\1/p"; }
+  SDCC=0; CART="-cart main.rom"
+  BCNT=$(eq backCount); RND=$(eq random); INP=$(eq input); FLAG=$(eq flag)
+fi
 run() {
 cat > "$TMP/run.tcl" <<EOT
 set ::out $TMP/out$1.txt
-set ::sdcc 0
-set ::bcnt $(eq backCount)
-set ::rnd $(eq random)
-set ::inp $(eq input)
-set ::flagaddr $(eq flag)
+set ::sdcc $SDCC
+set ::bin "$BIN"
+set ::bcnt $BCNT
+set ::rnd $RND
+set ::inp $INP
+set ::flagaddr $FLAG
 set ::seed $1
 set ::to ${FRAMES:-3000}
 source $HERE/handler-time.tcl
 EOT
-openmsx -machine C-BIOS_MSX1 -cart main.rom -script "$TMP/run.tcl" >/dev/null 2>&1
+openmsx -machine C-BIOS_MSX1 $CART -script "$TMP/run.tcl" >/dev/null 2>&1
 }
 n=${SEEDS:-4}; i=0
 while [ $i -lt $n ]; do run $i; i=$((i+1)); done
