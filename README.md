@@ -94,13 +94,13 @@ tools/bin-time.sh asm                     # アセンブラ版（orig/damaxian-m
 tools/bin-time.sh sdcc                    # SDCC 版（orig/damaxian_msx を SDCC でビルド）
 ```
 
-**hlang（beb8349）、SDCC 4.6.0 での値:**
+**hlang（99fa283）、SDCC 4.6.0 での値:**
 
 | | 平均 | 95% | 最大 | 1/60 秒超え |
 | --- | --- | --- | --- | --- |
-| hlang 版（調整後。ここと [versions/02-tuned](versions/02-tuned/)） | **43,392T** | 56,779T | 87,870T | 2.0% |
+| hlang 版（調整後。ここと [versions/02-tuned](versions/02-tuned/)） | **43,251T** | 56,582T | 87,550T | 1.9% |
 | アセンブラ版 | 46,190T | 57,682T | 91,834T | 2.9% |
-| hlang 版（素直に写した版。[versions/01-straight](versions/01-straight/)） | 47,072T | 60,226T | 91,276T | 5.9% |
+| hlang 版（素直に写した版。[versions/01-straight](versions/01-straight/)） | 46,994T | 60,127T | 91,157T | 5.7% |
 | SDCC 版 | 69,037T | 91,125T | 125,761T | 77.4% |
 
 | | hlang 版 | SDCC 版 | アセンブラ版 |
