@@ -1,5 +1,6 @@
 # 割り込み処理（H.TIMI から呼ぶ関数）の所要時間を、ゲームフレームごとに記録する openMSX のスクリプト。tools/handler-time.sh から使う
 set throttle off
+set renderer none
 set ::fc 0
 set ::armed 0
 set ::calls 0
@@ -41,6 +42,9 @@ proc setkeys {fc} {
   }
 }
 proc leave {} {
+  # 重なった割り込みが、この出口と同じ番地・同じ SP に戻ることがある（処理の ret の直前に割り込まれたとき）。
+  # その割り込みの時間を先に引く。引かないと、入れ子で走った次のフレームの分まで入ってしまう。
+  if {$::isrbp ne ""} isr_out
   set dt [expr {[machine_info time] - $::t0 - $::acc}]
   puts $::f "$::fc [expr {int($dt * 3579545)}] $::nested"
   catch {debug remove_bp $::exitbp}
